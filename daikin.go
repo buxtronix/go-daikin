@@ -64,7 +64,7 @@ func (p *Power) setUrlValues(v url.Values) {
 	v.Set("pow", strconv.Itoa(int(*p)))
 }
 
-func (p *Power) set(s string) error {
+func (p *Power) decode(s string) error {
 	switch s {
 	case "0":
 		*p = Power(PowerOff)
@@ -120,7 +120,7 @@ func (m *Mode) setUrlValues(v url.Values) {
 	v.Set("mode", strconv.Itoa(int(*m)))
 }
 
-func (m *Mode) set(s string) error {
+func (m *Mode) decode(s string) error {
 	switch s {
 	case "2":
 		*m = Mode(ModeDehumidify)
@@ -170,7 +170,7 @@ func (f *Fan) setUrlValues(v url.Values) {
 	v.Set("f_rate", string(*f))
 }
 
-func (f *Fan) set(s string) error {
+func (f *Fan) decode(s string) error {
 	switch s {
 	case "A":
 		*f = Fan(FanAuto)
@@ -222,7 +222,7 @@ func (f *FanDir) setUrlValues(v url.Values) {
 	v.Set("f_dir", strconv.Itoa(int(*f)))
 }
 
-func (f *FanDir) set(s string) error {
+func (f *FanDir) decode(s string) error {
 	v, err := strconv.Atoi(s)
 	if err != nil {
 		return fmt.Errorf("invalid f_dir value: %s (err=%v)", s, err)
@@ -243,43 +243,46 @@ func (f *FanDir) String() string {
 	return v
 }
 
-// Stemp is the set temperature of the Daikin unit, in Celcius.
-type Stemp float64
+// Temperature is the set temperature of the Daikin unit, in Celcius.
+type Temperature float64
 
-func (s *Stemp) setUrlValues(v url.Values) {
-	v.Set("stemp", s.String())
+func (t *Temperature) setUrlValues(v url.Values) {
+	v.Set("stemp", t.String())
 }
 
-func (s *Stemp) set(v string) error {
+func (t *Temperature) decode(v string) error {
 	val, err := strconv.ParseFloat(v, 64)
 	if err != nil {
 		return fmt.Errorf("error parsing s_temp=%s: %v", v, err)
 	}
-	*s = Stemp(val)
+	*t = Temperature(val)
 	return nil
 }
 
-func (s *Stemp) String() string {
-	return strconv.FormatFloat(float64(*s), 'f', 1, 64)
+func (t *Temperature) String() string {
+	return strconv.FormatFloat(float64(*t), 'f', 1, 64)
 }
 
 // Shum is the set humidity of the Daikin unit.
-type Shum int32
+type Humidity int32
 
-func (s *Shum) String() string {
-	return strconv.Itoa(int(*s))
+func (h *Humidity) String() string {
+	return strconv.Itoa(int(*h))
 }
 
-func (s *Shum) setUrlValues(v url.Values) {
-	v.Set("shum", s.String())
+func (h *Humidity) setUrlValues(v url.Values) {
+	v.Set("shum", h.String())
 }
 
-func (s *Shum) set(v string) error {
+func (h *Humidity) decode(v string) error {
+	if v == "-" {
+		v = "-1"
+	}
 	val, err := strconv.Atoi(v)
 	if err != nil {
 		return fmt.Errorf("error parsing s_hum=%s: %v", v, err)
 	}
-	*s = Shum(val)
+	*h = Humidity(val)
 	return nil
 }
 
@@ -294,7 +297,7 @@ func (n *Name) setUrlValues(v url.Values) {
 	v.Set("name", url.PathEscape(n.String()))
 }
 
-func (n *Name) set(s string) error {
+func (n *Name) decode(s string) error {
 	v, err := url.PathUnescape(s)
 	if err != nil {
 		return err
@@ -307,9 +310,52 @@ func (n *Name) set(s string) error {
 type Daikin struct {
 	// Address is the IP address of the unit.
 	Address string
-
 	// Name is the human-readable name of the unit.
 	Name Name
+	// ControlInfo contains the environment control info.
+	ControlInfo *ControlInfo
+	// SensorInfo contains the environment sensor info.
+	SensorInfo *SensorInfo
+}
+
+// SensorInfo represents current sensor values.
+type SensorInfo struct {
+	// HomeTemperature is the home (interior) temperature.
+	HomeTemperature Temperature
+	// OutsideTemperature is the external temperature.
+	OutsideTemperature Temperature
+	// Humidity is the current interior humidity.
+	Humidity Humidity
+}
+
+func (s *SensorInfo) populate(values map[string]string) error {
+	for k, v := range values {
+		var err error
+		switch k {
+		case "htemp":
+			err = s.HomeTemperature.decode(v)
+		case "otemp":
+			err = s.OutsideTemperature.decode(v)
+		case "hhum":
+			err = s.Humidity.decode(v)
+		case "ret":
+			if v != returnOk {
+				err = fmt.Errorf("device returned error ret=%s", v)
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SensorInfo) String() string {
+	return fmt.Sprintf("in_temp: %s\nin_humidity: %s\nout_temp: %s\n", s.HomeTemperature.String(), s.Humidity.String(), s.OutsideTemperature.String())
+}
+
+// ControlInfo represents the control status of the unit.
+type ControlInfo struct {
 	// Power is the current power status of the unit.
 	Power Power
 	// Mode is the operating mode of the unit.
@@ -318,10 +364,54 @@ type Daikin struct {
 	Fan Fan
 	// FanDir is the fan louvre setting of the unit.
 	FanDir FanDir
-	// Stemp is the current set temperature of the unit.
-	Stemp Stemp
-	// Shum is the set humidity of the unit.
-	Shum Shum
+	// Temperature is the current set temperature of the unit.
+	Temperature Temperature
+	// Humidity is the set humidity of the unit.
+	Humidity Humidity
+}
+
+func (c *ControlInfo) urlValues() url.Values {
+	qStr := url.Values{}
+	c.Power.setUrlValues(qStr)
+	c.Mode.setUrlValues(qStr)
+	c.Fan.setUrlValues(qStr)
+	c.FanDir.setUrlValues(qStr)
+	c.Temperature.setUrlValues(qStr)
+	c.Humidity.setUrlValues(qStr)
+	return qStr
+}
+
+func (c *ControlInfo) populate(values map[string]string) error {
+	for k, v := range values {
+		var err error
+		switch k {
+		case "pow":
+			err = c.Power.decode(v)
+		case "mode":
+			err = c.Mode.decode(v)
+		case "stemp":
+			err = c.Temperature.decode(v)
+		case "shum":
+			err = c.Humidity.decode(v)
+		case "f_rate":
+			err = c.Fan.decode(v)
+		case "f_dir":
+			err = c.FanDir.decode(v)
+		case "ret":
+			if v != returnOk {
+				err = fmt.Errorf("device returned error ret=%s", v)
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *ControlInfo) String() string {
+	return fmt.Sprintf("pow: %s\nmode: %s\nstemp: %s\nshum: %s\nf_rate: %s\nf_dir: %s",
+		c.Power.String(), c.Mode.String(), c.Temperature.String(), c.Humidity.String(), c.Fan.String(), c.FanDir.String())
 }
 
 func (d *Daikin) parseResponse(resp *http.Response) (map[string]string, error) {
@@ -349,14 +439,8 @@ func (d *Daikin) parseResponse(resp *http.Response) (map[string]string, error) {
 }
 
 // Set configures the current setting to the unit.
-func (d *Daikin) Set() error {
-	qStr := url.Values{}
-	d.Power.setUrlValues(qStr)
-	d.Mode.setUrlValues(qStr)
-	d.Fan.setUrlValues(qStr)
-	d.FanDir.setUrlValues(qStr)
-	d.Stemp.setUrlValues(qStr)
-	d.Shum.setUrlValues(qStr)
+func (d *Daikin) SetControlInfo() error {
+	qStr := d.ControlInfo.urlValues()
 	resp, err := http.PostForm(fmt.Sprintf("http://%s%s", d.Address, uriSetControlInfo), qStr)
 	if err != nil {
 		return err
@@ -371,50 +455,34 @@ func (d *Daikin) Set() error {
 	return nil
 }
 
-// Get gets the current settings for the unit.
-func (d *Daikin) Get() error {
+// GetControlInfo gets the current control settings for the unit.
+func (d *Daikin) GetControlInfo() error {
 	resp, err := http.Get(fmt.Sprintf("http://%s%s", d.Address, uriGetControlInfo))
 	if err != nil {
 		return err
 	}
+	d.ControlInfo = &ControlInfo{}
 	vals, err := d.parseResponse(resp)
 	if err != nil {
 		return err
 	}
-	return d.populate(vals)
+	return d.ControlInfo.populate(vals)
 }
 
-func (d *Daikin) populate(values map[string]string) error {
-	for k, v := range values {
-		var err error
-		switch k {
-		case "pow":
-			err = d.Power.set(v)
-		case "mode":
-			err = d.Mode.set(v)
-		case "stemp":
-			err = d.Stemp.set(v)
-		case "shum":
-			err = d.Shum.set(v)
-		case "f_rate":
-			err = d.Fan.set(v)
-		case "f_dir":
-			err = d.FanDir.set(v)
-		case "name":
-			err = d.Name.set(v)
-		case "ret":
-			if v != returnOk {
-				err = fmt.Errorf("device returned error ret=%s", v)
-			}
-		}
-		if err != nil {
-			return err
-		}
+// GetSensorInfo gets the current sensor values for the unit.
+func (d *Daikin) GetSensorInfo() error {
+	resp, err := http.Get(fmt.Sprintf("http://%s%s", d.Address, uriGetSensorInfo))
+	if err != nil {
+		return err
 	}
-	return nil
+	d.SensorInfo = &SensorInfo{}
+	vals, err := d.parseResponse(resp)
+	if err != nil {
+		return err
+	}
+	return d.SensorInfo.populate(vals)
 }
 
 func (d *Daikin) String() string {
-	return fmt.Sprintf("name: %s\npow: %s\nmode: %s\nstemp: %s\nshum: %s\nf_rate: %s\nf_dir: %s",
-		d.Name.String(), d.Power.String(), d.Mode.String(), d.Stemp.String(), d.Shum.String(), d.Fan.String(), d.FanDir.String())
+	return fmt.Sprintf("name: %s\n%s\n%s\n", d.Name.String(), d.ControlInfo.String(), d.SensorInfo.String())
 }

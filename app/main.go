@@ -24,7 +24,6 @@ var (
 	fanHorizontal = flag.Bool("horizontal", false, "Sweep louvres horizontally")
 
 	setTemp = flag.Float64("temp", 22.0, "Temperature to set to")
-
 )
 
 func main() {
@@ -41,43 +40,47 @@ func main() {
 
 	fmt.Printf("Devices:\n")
 	for a, d := range d.Devices {
-		if err := d.Get(); err != nil {
+		if err := d.GetControlInfo(); err != nil {
+			glog.Error(err)
+			continue
+		}
+		if err := d.GetSensorInfo(); err != nil {
 			glog.Error(err)
 			continue
 		}
 		fmt.Printf("Current %s:\n%s\n\n", a, d)
 		if *powerOn || *powerOff {
 			if *powerOn {
-				d.Power = daikin.PowerOn
+				d.ControlInfo.Power = daikin.PowerOn
 			}
 			if *powerOff {
-				d.Power = daikin.PowerOff
+				d.ControlInfo.Power = daikin.PowerOff
 			}
 			if *modeHeat {
-				d.Mode = daikin.ModeHeat
+				d.ControlInfo.Mode = daikin.ModeHeat
 			}
 			if *modeCool {
-				d.Mode = daikin.ModeCool
+				d.ControlInfo.Mode = daikin.ModeCool
 			}
 			if *modeFan {
-				d.Mode = daikin.ModeFan
+				d.ControlInfo.Mode = daikin.ModeFan
 			}
 
 			switch *fanRate {
 			case "A":
-				d.Fan = daikin.FanAuto
+				d.ControlInfo.Fan = daikin.FanAuto
 			case "B":
-				d.Fan = daikin.FanSilent
+				d.ControlInfo.Fan = daikin.FanSilent
 			case "1":
-				d.Fan = daikin.Fan1
+				d.ControlInfo.Fan = daikin.Fan1
 			case "2":
-				d.Fan = daikin.Fan2
+				d.ControlInfo.Fan = daikin.Fan2
 			case "3":
-				d.Fan = daikin.Fan3
+				d.ControlInfo.Fan = daikin.Fan3
 			case "4":
-				d.Fan = daikin.Fan4
+				d.ControlInfo.Fan = daikin.Fan4
 			case "5":
-				d.Fan = daikin.Fan5
+				d.ControlInfo.Fan = daikin.Fan5
 			case "":
 				// Noop.
 			default:
@@ -86,25 +89,28 @@ func main() {
 
 			switch {
 			case *fanHorizontal && *fanVertical:
-				d.FanDir = daikin.FanDirBoth
+				d.ControlInfo.FanDir = daikin.FanDirBoth
 			case *fanVertical:
-				d.FanDir = daikin.FanDirVertical
+				d.ControlInfo.FanDir = daikin.FanDirVertical
 			case *fanHorizontal:
-				d.FanDir = daikin.FanDirHorizontal
+				d.ControlInfo.FanDir = daikin.FanDirHorizontal
 			default:
-				d.FanDir = daikin.FanDirBoth
+				d.ControlInfo.FanDir = daikin.FanDirStopped
 			}
 
 			if *setTemp > 0 {
-				d.Stemp = daikin.Stemp(*setTemp)
+				d.ControlInfo.Temperature = daikin.Temperature(*setTemp)
 			}
 			fmt.Printf("Setting to new values:\n%s\n\n", d)
 
-			if err := d.Set(); err != nil {
+			if err := d.SetControlInfo(); err != nil {
 				glog.Exitf("Error setting aircon: %v", err)
 			}
 
-			if err := d.Get(); err != nil {
+			if err := d.GetControlInfo(); err != nil {
+				glog.Exitf("Error getting aircon data: %v", err)
+			}
+			if err := d.GetSensorInfo(); err != nil {
 				glog.Exitf("Error getting aircon data: %v", err)
 			}
 			fmt.Printf("New values %s:\n%s\n\n", a, d)
