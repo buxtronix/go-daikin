@@ -1,4 +1,4 @@
-module github.com/buxtronix/daikin
+module github.com/buxtronix/go-daikin
 
 go 1.12
 

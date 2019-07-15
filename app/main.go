@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/buxtronix/daikin"
+	"github.com/buxtronix/go-daikin"
 	"github.com/golang/glog"
 )
 

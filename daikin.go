@@ -195,7 +195,7 @@ func (f *Fan) decode(s string) error {
 func (f *Fan) String() string {
 	v, ok := fanMap[*f]
 	if !ok {
-		return fmt.Sprintf("Unknown Fan [%d]", *f)
+		return fmt.Sprintf("Unknown Fan [%v]", *f)
 	}
 	return v
 }
