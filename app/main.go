@@ -1,3 +1,5 @@
+// Package main is a command line tool for querying and controlling
+// Daikin AC/Heatpump units.
 package main
 
 import (
