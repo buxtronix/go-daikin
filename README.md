@@ -58,18 +58,24 @@ Set state for a specific device:
 package main
 
 import(
+  "flag"
   "fmt"
 
-  "github.com/buxtronix/go-daikin"
   "github.com/golang/glog"
+  daikin "github.com/buxtronix/go-daikin"
+)
+
+var (
+  address = flag.String("address", "", "Address of daikin unit")
 )
 
 func main() {
-  d, err := daikin.NewNetwork(daikin.AddressOption("192.168.0.60"))
+  flag.Parse()
+  d, err := daikin.NewNetwork(daikin.AddressOption(*address))
   if err != nil {
     glog.Exit(err)
   }
-  dev := d.Devices[0]
+  dev := d.Devices[*address]
   if err := dev.GetControlInfo(); err != nil {
     glog.Error(err)
     continue
