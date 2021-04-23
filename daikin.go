@@ -4,6 +4,7 @@
 package daikin
 
 import (
+	"crypto/tls"
 	"encoding/csv"
 	"fmt"
 	"io/ioutil"
@@ -310,6 +311,8 @@ func (n *Name) decode(s string) error {
 type Daikin struct {
 	// Address is the IP address of the unit.
 	Address string
+	// Some daikin units require an authentication token in the HTTP Headers
+	Token string
 	// Name is the human-readable name of the unit.
 	Name Name
 	// ControlInfo contains the environment control info.
@@ -441,7 +444,7 @@ func (d *Daikin) parseResponse(resp *http.Response) (map[string]string, error) {
 // Set configures the current setting to the unit.
 func (d *Daikin) SetControlInfo() error {
 	qStr := d.ControlInfo.urlValues()
-	resp, err := http.PostForm(fmt.Sprintf("http://%s%s", d.Address, uriSetControlInfo), qStr)
+	resp, err := d.httpGet(fmt.Sprintf("%s?%s", uriSetControlInfo, qStr.Encode()))
 	if err != nil {
 		return err
 	}
@@ -457,7 +460,7 @@ func (d *Daikin) SetControlInfo() error {
 
 // GetControlInfo gets the current control settings for the unit.
 func (d *Daikin) GetControlInfo() error {
-	resp, err := http.Get(fmt.Sprintf("http://%s%s", d.Address, uriGetControlInfo))
+	resp, err := d.httpGet(uriGetControlInfo)
 	if err != nil {
 		return err
 	}
@@ -469,9 +472,35 @@ func (d *Daikin) GetControlInfo() error {
 	return d.ControlInfo.populate(vals)
 }
 
+func (d *Daikin) httpGet(path string) (*http.Response, error) {
+	var scheme string
+	if d.Token == "" {
+		scheme = "http"
+	} else {
+		scheme = "https"
+	}
+	request, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%s://%s%s", scheme, d.Address, path), nil)
+	if d.Token != "" {
+		request.Header["X-Daikin-uuid"] = []string{d.Token}
+	}
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+
+	client := &http.Client{Transport: tr}
+	resp, err := client.Do(request)
+	if err != nil {
+		return resp, err
+	}
+	if resp.StatusCode != 200 {
+		return resp, fmt.Errorf("GET %s request failed: %d", path, resp.StatusCode)
+	}
+	return resp, err
+}
+
 // GetSensorInfo gets the current sensor values for the unit.
 func (d *Daikin) GetSensorInfo() error {
-	resp, err := http.Get(fmt.Sprintf("http://%s%s", d.Address, uriGetSensorInfo))
+	resp, err := d.httpGet(uriGetSensorInfo)
 	if err != nil {
 		return err
 	}
