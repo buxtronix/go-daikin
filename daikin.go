@@ -4,6 +4,7 @@
 package daikin
 
 import (
+	"crypto/tls"
 	"encoding/csv"
 	"fmt"
 	"io/ioutil"
@@ -306,16 +307,64 @@ func (n *Name) decode(s string) error {
 	return nil
 }
 
+type WattHours int32
+
+func (w *WattHours) String() string {
+	return strconv.Itoa(int(*w))
+}
+
+func (w *WattHours) setUrlValues(v url.Values) {
+	return
+}
+
+func (w *WattHours) decode(v string) error {
+	if v == "-" {
+		v = "-1"
+	}
+	val, err := strconv.Atoi(v)
+	if err != nil {
+		return fmt.Errorf("error parsing watt hours=%s: %v", v, err)
+	}
+	*w = WattHours(val)
+	return nil
+}
+
+type Minutes int32
+
+func (m *Minutes) String() string {
+	return strconv.Itoa(int(*m))
+}
+
+func (m *Minutes) setUrlValues(v url.Values) {
+	return
+}
+
+func (m *Minutes) decode(v string) error {
+	if v == "-" {
+		v = "-1"
+	}
+	val, err := strconv.Atoi(v)
+	if err != nil {
+		return fmt.Errorf("error parsing minutes=%s: %v", v, err)
+	}
+	*m = Minutes(val)
+	return nil
+}
+
 // Daikin represents the settings of the Daikin unit.
 type Daikin struct {
 	// Address is the IP address of the unit.
 	Address string
+	// Some daikin units require an authentication token in the HTTP Headers
+	Token string
 	// Name is the human-readable name of the unit.
 	Name Name
 	// ControlInfo contains the environment control info.
 	ControlInfo *ControlInfo
 	// SensorInfo contains the environment sensor info.
 	SensorInfo *SensorInfo
+	// WeekPower contains daily power usage data for the past 7 days
+	WeekPower *WeekPower
 }
 
 // SensorInfo represents current sensor values.
@@ -414,6 +463,63 @@ func (c *ControlInfo) String() string {
 		c.Power.String(), c.Mode.String(), c.Temperature.String(), c.Humidity.String(), c.Fan.String(), c.FanDir.String())
 }
 
+// WeekPower represents power usage over the past 7 days
+type WeekPower struct {
+	TodayRuntime          Minutes
+	TodayWattHours        WattHours
+	YesterdayWattHours    WattHours
+	ThreeDaysAgoWattHours WattHours
+	FourDaysAgoWattHours  WattHours
+	FiveDaysAgoWattHours  WattHours
+	SixDaysAgoWattHours   WattHours
+	SevenDaysAgoWattHours WattHours
+}
+
+// ret=OK,today_runtime=85,datas=5200/3800/5300/1800/2900/3900/1100
+func (w *WeekPower) populate(values map[string]string) error {
+	for k, v := range values {
+		var err error
+		switch k {
+		case "today_runtime":
+			err = w.TodayRuntime.decode(v)
+		case "datas":
+			elems := strings.Split(v, "/")
+			if len(elems) != 7 {
+				return fmt.Errorf("expected 7 elements in week power data, got %d", len(elems))
+			}
+			w.SevenDaysAgoWattHours.decode(elems[0])
+			w.SixDaysAgoWattHours.decode(elems[1])
+			w.FiveDaysAgoWattHours.decode(elems[2])
+			w.FourDaysAgoWattHours.decode(elems[3])
+			w.ThreeDaysAgoWattHours.decode(elems[4])
+			w.YesterdayWattHours.decode(elems[5])
+			w.TodayWattHours.decode(elems[6])
+		case "ret":
+			if v != returnOk {
+				err = fmt.Errorf("device returned error ret=%s", v)
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *WeekPower) String() string {
+	return fmt.Sprintf(
+		"today_runtime: %d\nwatt_hours: %d %d %d %d %d %d %d %d\n",
+		w.TodayRuntime.String(),
+		w.SevenDaysAgoWattHours.String(),
+		w.SixDaysAgoWattHours.String(),
+		w.FiveDaysAgoWattHours.String(),
+		w.FourDaysAgoWattHours.String(),
+		w.ThreeDaysAgoWattHours.String(),
+		w.YesterdayWattHours.String(),
+		w.TodayWattHours.String(),
+	)
+}
+
 func (d *Daikin) parseResponse(resp *http.Response) (map[string]string, error) {
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
@@ -441,7 +547,7 @@ func (d *Daikin) parseResponse(resp *http.Response) (map[string]string, error) {
 // Set configures the current setting to the unit.
 func (d *Daikin) SetControlInfo() error {
 	qStr := d.ControlInfo.urlValues()
-	resp, err := http.PostForm(fmt.Sprintf("http://%s%s", d.Address, uriSetControlInfo), qStr)
+	resp, err := d.httpGet(fmt.Sprintf("%s?%s", uriSetControlInfo, qStr.Encode()))
 	if err != nil {
 		return err
 	}
@@ -457,30 +563,69 @@ func (d *Daikin) SetControlInfo() error {
 
 // GetControlInfo gets the current control settings for the unit.
 func (d *Daikin) GetControlInfo() error {
-	resp, err := http.Get(fmt.Sprintf("http://%s%s", d.Address, uriGetControlInfo))
+	resp, err := d.httpGet(uriGetControlInfo)
 	if err != nil {
 		return err
 	}
 	d.ControlInfo = &ControlInfo{}
 	vals, err := d.parseResponse(resp)
 	if err != nil {
-		return err
+		return fmt.Errorf("GetControlInfo: %v", err)
 	}
 	return d.ControlInfo.populate(vals)
 }
 
+func (d *Daikin) httpGet(path string) (*http.Response, error) {
+	var scheme string
+	if d.Token == "" {
+		scheme = "http"
+	} else {
+		scheme = "https"
+	}
+	request, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%s://%s%s", scheme, d.Address, path), nil)
+	if d.Token != "" {
+		request.Header["X-Daikin-uuid"] = []string{d.Token}
+	}
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+
+	client := &http.Client{Transport: tr}
+	resp, err := client.Do(request)
+	if err != nil {
+		return resp, err
+	}
+	if resp.StatusCode != 200 {
+		return resp, fmt.Errorf("GET %s request failed: %d", path, resp.StatusCode)
+	}
+	return resp, err
+}
+
 // GetSensorInfo gets the current sensor values for the unit.
 func (d *Daikin) GetSensorInfo() error {
-	resp, err := http.Get(fmt.Sprintf("http://%s%s", d.Address, uriGetSensorInfo))
+	resp, err := d.httpGet(uriGetSensorInfo)
 	if err != nil {
 		return err
 	}
 	d.SensorInfo = &SensorInfo{}
 	vals, err := d.parseResponse(resp)
 	if err != nil {
-		return err
+		return fmt.Errorf("GetSensorInfo: %v", err)
 	}
 	return d.SensorInfo.populate(vals)
+}
+
+func (d *Daikin) GetWeekPower() error {
+	resp, err := d.httpGet(uriGetWeekPower)
+	if err != nil {
+		return err
+	}
+	d.WeekPower = &WeekPower{}
+	vals, err := d.parseResponse(resp)
+	if err != nil {
+		return fmt.Errorf("GetWeekPower: %v", err)
+	}
+	return d.WeekPower.populate(vals)
 }
 
 func (d *Daikin) String() string {

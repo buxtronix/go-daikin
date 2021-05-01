@@ -36,6 +36,18 @@ func AddressOption(addr string) func(*DaikinNetwork) {
 	}
 }
 
+// AddressTokenOption specifies a specific address to query, and the API token to authenticate with
+func AddressTokenOption(addr string, token string) func(*DaikinNetwork) {
+	return func(d *DaikinNetwork) {
+		if addr != "" {
+			d.Devices = map[string]*Daikin{
+				addr: &Daikin{Address: addr, Token: token},
+			}
+			d.PollCount = 0
+		}
+	}
+}
+
 // NewNetwork returns a new DaikinNetwork, attached to the given interface.
 func NewNetwork(o ...Option) (*DaikinNetwork, error) {
 	dn := &DaikinNetwork{
